@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>VeiCloud Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      margin: 0;
+      background: #080812;
+      color: white;
+      font-family: Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .card {
+      width: 460px;
+      background: #121222;
+      padding: 28px;
+      border-radius: 22px;
+      box-shadow: 0 0 45px rgba(124, 60, 255, 0.25);
+    }
+
+    h1 { margin-top: 0; }
+
+    label {
+      display: block;
+      margin-top: 14px;
+      font-size: 14px;
+      opacity: 0.85;
+    }
+
+    input, select, button {
+      width: 100%;
+      margin-top: 8px;
+      padding: 14px;
+      border-radius: 12px;
+      border: none;
+      font-size: 15px;
+      box-sizing: border-box;
+    }
+
+    input, select {
+      background: #1f1f33;
+      color: white;
+    }
+
+    button {
+      background: #7c3cff;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 18px;
+    }
+
+    button:disabled { opacity: 0.5; }
+
+    .hidden { display: none; }
+
+    .result {
+      margin-top: 18px;
+      background: #19192b;
+      padding: 14px;
+      border-radius: 12px;
+      word-break: break-all;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    progress {
+      width: 100%;
+      margin-top: 18px;
+      height: 20px;
+    }
+
+    .stats {
+      margin-top: 10px;
+      font-size: 13px;
+      opacity: 0.85;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="card">
+    <h1>VeiCloud Admin</h1>
+
+    <label>Tipo de contenido</label>
+    <select id="mode">
+      <option value="movie">Película</option>
+      <option value="series">Serie</option>
+    </select>
+
+    <label>Título / Serie</label>
+    <input id="title" placeholder="Ej: Avatar o Breaking Bad" list="seriesList" />
+    <datalist id="seriesList"></datalist>
+
+    <div id="seriesFields" class="hidden">
+      <label>Temporada</label>
+      <input id="season" type="number" min="1" placeholder="Ej: 1" />
+
+      <label>Capítulo</label>
+      <input id="episode" type="number" min="1" placeholder="Ej: 1" />
+    </div>
+
+    <label>Archivo de video</label>
+    <input id="video" type="file" accept="video/mp4,video/*" />
+
+    <button id="uploadBtn">Subir y generar enlace</button>
+
+    <progress id="progress" value="0" max="100"></progress>
+
+    <div class="stats" id="stats">Esperando archivo...</div>
+    <div id="result" class="result">Aquí aparecerá el enlace de reproducción.</div>
+  </div>
+
+  <script>
+    const modeEl = document.getElementById("mode");
+    const titleEl = document.getElementById("title");
+    const seasonEl = document.getElementById("season");
+    const episodeEl = document.getElementById("episode");
+    const videoEl = document.getElementById("video");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const progress = document.getElementById("progress");
+    const stats = document.getElementById("stats");
+    const result = document.getElementById("result");
+    const seriesFields = document.getElementById("seriesFields");
+    const seriesList = document.getElementById("seriesList");
+
+    let startTime = 0;
+
+    modeEl.addEventListener("change", () => {
+      const isSeries = modeEl.value === "series";
+      seriesFields.classList.toggle("hidden", !isSeries);
+
+      if (isSeries) {
+        loadSeries();
+      }
+    });
+
+    async function loadSeries() {
+      try {
+        const res = await fetch("/api/series");
+        const data = await res.json();
+
+        if (!data.success) return;
+
+        seriesList.innerHTML = "";
+
+        data.series.forEach(name => {
+          const option = document.createElement("option");
+          option.value = name;
+          seriesList.appendChild(option);
+        });
+      } catch (e) {
+        console.log("No se pudieron cargar las series", e);
+      }
+    }
+
+    uploadBtn.onclick = async () => {
+      const mode = modeEl.value;
+      const title = titleEl.value.trim();
+      const file = videoEl.files[0];
+
+      if (!title || !file) {
+        alert("Pon título/serie y selecciona un video.");
+        return;
+      }
+
+      if (mode === "series") {
+        if (!seasonEl.value || !episodeEl.value) {
+          alert("En series debes poner temporada y capítulo.");
+          return;
+        }
+      }
+
+      uploadBtn.disabled = true;
+      progress.value = 0;
+      result.innerText = "Creando enlace seguro...";
+      stats.innerText = "Preparando subida...";
+
+      try {
+        const res = await fetch("/api/create-upload-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode,
+            title,
+            fileName: file.name,
+            contentType: file.type || "video/mp4",
+            season: seasonEl.value,
+            episode: episodeEl.value
+          })
+        });
+
+        const data = await res.json();
+
+        if (!data.success) {
+          throw new Error(data.message || "No se pudo crear el enlace.");
+        }
+
+        result.innerText = "Subiendo archivo a Cloudflare R2...";
+        await uploadFile(data.uploadUrl, file);
+
+        result.innerHTML = `
+          <b>Subida completada ✅</b><br><br>
+          <b>Ruta:</b><br>${data.key}<br><br>
+          <b>Enlace de reproducción:</b><br>
+          <a href="${data.playbackUrl}" target="_blank" style="color:#b99cff;">
+            ${data.playbackUrl}
+          </a>
+        `;
+
+        stats.innerText = "Archivo subido correctamente.";
+      } catch (error) {
+        result.innerText = "Error: " + error.message;
+      }
+
+      uploadBtn.disabled = false;
+    };
+
+    function uploadFile(uploadUrl, file) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        startTime = Date.now();
+
+        xhr.open("PUT", uploadUrl, true);
+        xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
+
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+
+          const percent = Math.round((event.loaded / event.total) * 100);
+          progress.value = percent;
+
+          const elapsedSeconds = (Date.now() - startTime) / 1000;
+          const speed = event.loaded / elapsedSeconds;
+          const remaining = event.total - event.loaded;
+          const etaSeconds = remaining / speed;
+
+          stats.innerText =
+            percent + "% | " +
+            formatBytes(event.loaded) + " / " + formatBytes(event.total) +
+            " | Velocidad: " + formatBytes(speed) + "/s" +
+            " | Tiempo estimado: " + formatTime(etaSeconds);
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error("Falló la subida. Código: " + xhr.status));
+        };
+
+        xhr.onerror = () => reject(new Error("Error de red subiendo archivo."));
+
+        xhr.send(file);
+      });
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes <= 0) return "0 B";
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      const index = Math.floor(Math.log(bytes) / Math.log(1024));
+      return (bytes / Math.pow(1024, index)).toFixed(2) + " " + units[index];
+    }
+
+    function formatTime(seconds) {
+      if (!isFinite(seconds) || seconds < 0) return "calculando...";
+      const min = Math.floor(seconds / 60);
+      const sec = Math.floor(seconds % 60);
+      return min + "m " + sec + "s";
+    }
+  </script>
+</body>
+</html>
